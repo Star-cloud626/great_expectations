@@ -853,6 +853,62 @@ def test_get_dialect_like_pattern_expression_rejects_escape_on_bigquery():
         )
 
 
+# The dialects whose branch in get_dialect_like_pattern_expression is selected by a plain
+# hasattr check, so a stub is enough to reach it. Teradata is left out because its branch
+# tests issubclass against the real teradatasqlalchemy dialect, which is not installed here.
+#
+# Every one of these documents a SQL ESCAPE clause on LIKE: Trino
+# (https://trino.io/docs/current/functions/comparison.html), ClickHouse
+# (https://clickhouse.com/docs/sql-reference/functions/string-search-functions), Dremio
+# (https://docs.dremio.com/cloud/reference/sql/sql-functions/functions/LIKE/) and Snowflake.
+# BigQuery is the one supported dialect that does not, which is why it alone is guarded.
+ESCAPE_SUPPORTING_DIALECT_ATTRIBUTES = [
+    "TrinoDialect",
+    "ClickHouseDialect",
+    "DremioDialect",
+    "SnowflakeDialect",
+]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("dialect_attribute", ESCAPE_SUPPORTING_DIALECT_ATTRIBUTES)
+@pytest.mark.parametrize("positive", [True, False], ids=["positive", "negative"])
+def test_get_dialect_like_pattern_expression_emits_escape_for_supported_dialects(
+    dialect_attribute: str, positive: bool
+):
+    """Every dialect the helper lets through must receive the ESCAPE clause it asked for.
+
+    These four reach the same `column.like(..., escape=escape)` call as the dialects the
+    integration suite covers, but none of them appears in any data-source list there --
+    Dremio and Teradata have no test config at all, and Trino's is unused -- so this is
+    what pins the claim that BigQuery is the only dialect needing a guard.
+    """
+    dialect = SimpleNamespace(**{dialect_attribute: object})
+
+    expression = get_dialect_like_pattern_expression(
+        column=sa.column("col"), dialect=dialect, like_pattern="a!_b", positive=positive, escape="!"
+    )
+
+    assert expression is not None
+    compiled = str(expression.compile(compile_kwargs={"literal_binds": True}))
+    assert compiled.endswith("LIKE 'a!_b' ESCAPE '!'")
+    assert ("NOT LIKE" in compiled) is not positive
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("dialect_attribute", ESCAPE_SUPPORTING_DIALECT_ATTRIBUTES)
+def test_only_bigquery_rejects_an_escape(dialect_attribute: str):
+    """The BigQuery guard must not catch any other dialect."""
+    dialect = SimpleNamespace(**{dialect_attribute: object})
+
+    assert (
+        get_dialect_like_pattern_expression(
+            column=sa.column("col"), dialect=dialect, like_pattern="a!_b", escape="!"
+        )
+        is not None
+    )
+
+
 @pytest.mark.unit
 def test_get_dialect_like_pattern_expression_allows_bigquery_without_escape():
     """The BigQuery guard must only fire when an escape was actually requested."""

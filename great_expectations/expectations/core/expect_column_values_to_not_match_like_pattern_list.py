@@ -13,7 +13,12 @@ from great_expectations.expectations.metadata_types import DataQualityIssues, Su
 from great_expectations.expectations.model_field_descriptions import (
     COLUMN_DESCRIPTION,
     FAILURE_SEVERITY_DESCRIPTION,
+    LIKE_PATTERN_ESCAPE_DESCRIPTION,
     MOSTLY_DESCRIPTION,
+)
+from great_expectations.expectations.model_field_types import (
+    LikePatternEscapeField,
+    validate_like_pattern_escape,
 )
 from great_expectations.render.components import (
     LegacyRendererType,
@@ -41,18 +46,6 @@ EXPECTATION_SHORT_DESCRIPTION = (
 )
 LIKE_PATTERN_LIST_DESCRIPTION = (
     "The list of SQL like pattern expressions the column entries should NOT match."
-)
-ESCAPE_DESCRIPTION = (
-    "A single character that removes the special meaning of the `_` and `%` wildcards "
-    "that follow it in the like pattern, emitted as a SQL `ESCAPE` clause. Required to "
-    "match those characters literally: dialects disagree about an unannounced backslash "
-    "(PostgreSQL treats it as an escape, SQLite treats it as an ordinary character, and "
-    "Snowflake requires the clause to be stated), so a pattern relying on the default is "
-    "not portable. Prefer a character other than a backslash: several dialects also treat "
-    "a backslash specially inside string literals, before the pattern reaches LIKE, and "
-    "Redshift rejects `ESCAPE '\\'` outright. Omit it to emit no `ESCAPE` clause. Not "
-    "supported on BigQuery, whose GoogleSQL has no `ESCAPE` clause: escape wildcards "
-    "inside the pattern there instead."
 )
 DATA_QUALITY_ISSUES = [DataQualityIssues.VALIDITY.value]
 SUPPORTED_DATA_SOURCES = [
@@ -88,7 +81,7 @@ class ExpectColumnValuesToNotMatchLikePatternList(ColumnMapExpectation):
 
     Other Parameters:
         escape (str or None): \
-            {ESCAPE_DESCRIPTION}
+            {LIKE_PATTERN_ESCAPE_DESCRIPTION}
         mostly (None or a float between 0 and 1): \
             {MOSTLY_DESCRIPTION} \
             For more detail, see [mostly](https://docs.greatexpectations.io/docs/reference/expectations/standard_arguments/#mostly).
@@ -209,20 +202,9 @@ class ExpectColumnValuesToNotMatchLikePatternList(ColumnMapExpectation):
     like_pattern_list: Union[List[str], SuiteParameterDict] = pydantic.Field(
         description=LIKE_PATTERN_LIST_DESCRIPTION
     )
-    escape: Union[str, SuiteParameterDict, None] = pydantic.Field(
-        default=None, description=ESCAPE_DESCRIPTION
-    )
+    escape: LikePatternEscapeField = None
 
-    @pydantic.validator("escape")
-    def validate_escape(
-        cls, escape: str | SuiteParameterDict | None
-    ) -> str | SuiteParameterDict | None:
-        # SQL permits exactly one escape character; a longer string would render an
-        # ESCAPE clause the database rejects, so fail here with a usable message instead.
-        if isinstance(escape, str) and len(escape) != 1:
-            raise ValueError("escape must be a single character.")  # noqa: TRY003 # FIXME CoP
-
-        return escape
+    _validate_escape = pydantic.validator("escape", allow_reuse=True)(validate_like_pattern_escape)
 
     @pydantic.validator("like_pattern_list")
     def validate_like_pattern_list(
@@ -297,6 +279,7 @@ class ExpectColumnValuesToNotMatchLikePatternList(ColumnMapExpectation):
         add_param_args: AddParamArgs = (
             ("column", RendererValueType.STRING),
             ("like_pattern_list", RendererValueType.ARRAY),
+            ("escape", RendererValueType.STRING),
             ("mostly", RendererValueType.NUMBER),
         )
         for name, param_type in add_param_args:
@@ -323,6 +306,11 @@ class ExpectColumnValuesToNotMatchLikePatternList(ColumnMapExpectation):
                 renderer_configuration=renderer_configuration,
             )
 
+        # Without this the escaped and unescaped Expectations render identically, and a
+        # reader takes the wildcards in the patterns at face value.
+        if params.escape:
+            template_str += ", escaping wildcards with $escape"
+
         if params.mostly and params.mostly.value < 1.0:
             renderer_configuration = cls._add_mostly_pct_param(
                 renderer_configuration=renderer_configuration
@@ -348,7 +336,7 @@ class ExpectColumnValuesToNotMatchLikePatternList(ColumnMapExpectation):
 
         params = substitute_none_for_missing(
             configuration.kwargs,
-            ["column", "like_pattern_list", "mostly"],
+            ["column", "like_pattern_list", "escape", "mostly"],
         )
         if params["mostly"] is not None:
             params["mostly_pct"] = num_to_str(params["mostly"] * 100, no_scientific=True)
@@ -363,6 +351,9 @@ class ExpectColumnValuesToNotMatchLikePatternList(ColumnMapExpectation):
             )
 
         template_str = "Values must not match the following like patterns: " + values_string
+
+        if params.get("escape") is not None:
+            template_str += ", escaping wildcards with $escape"
 
         if params["mostly"] is not None:
             if isinstance(params["mostly"], (int, float)) and params["mostly"] < 1.0:

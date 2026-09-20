@@ -167,6 +167,27 @@ class TestClickHouseRegexAndLikePatterns:
             )
         assert result.success
 
+    def test_match_like_pattern_with_escape(self) -> None:
+        """ClickHouse accepts the ESCAPE clause the `escape` parameter emits.
+
+        `get_dialect_like_pattern_expression` lets this dialect through to
+        `column.like(..., escape=...)` unguarded, on the strength of ClickHouse documenting
+        `haystack LIKE pattern [ESCAPE 'escape_character']`. This is the only one of the
+        four dialects reached that way -- Trino, Dremio and Teradata being the others --
+        that has a data source test config here to check that against a real server.
+
+        No value contains a literal underscore, so an escaped `_` must match nothing. The
+        unescaped pattern in `test_match_like_pattern` matches everything, which is what
+        makes this a check of the escape rather than of LIKE.
+        """
+        with self._batch_setup().batch_test_context() as batch:
+            result = batch.validate(
+                gxe.ExpectColumnValuesToMatchLikePattern(
+                    column=self.COL, like_pattern="a!_c", escape="!"
+                )
+            )
+        assert not result.success
+
 
 class TestClickHouseNullBearingData:
     """Insert real nulls into a string, an integer, a float and a date column -- each column

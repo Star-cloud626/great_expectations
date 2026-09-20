@@ -13,7 +13,12 @@ from great_expectations.expectations.metadata_types import DataQualityIssues, Su
 from great_expectations.expectations.model_field_descriptions import (
     COLUMN_DESCRIPTION,
     FAILURE_SEVERITY_DESCRIPTION,
+    LIKE_PATTERN_ESCAPE_DESCRIPTION,
     MOSTLY_DESCRIPTION,
+)
+from great_expectations.expectations.model_field_types import (
+    LikePatternEscapeField,
+    validate_like_pattern_escape,
 )
 from great_expectations.render import LegacyRendererType, RenderedStringTemplateContent
 from great_expectations.render.renderer.renderer import renderer
@@ -41,18 +46,6 @@ EXPECTATION_SHORT_DESCRIPTION = (
     "Expect the column entries to be strings that match a given like pattern expression."
 )
 LIKE_PATTERN_DESCRIPTION = "The SQL like pattern expression the column entries should match."
-ESCAPE_DESCRIPTION = (
-    "A single character that removes the special meaning of the `_` and `%` wildcards "
-    "that follow it in the like pattern, emitted as a SQL `ESCAPE` clause. Required to "
-    "match those characters literally: dialects disagree about an unannounced backslash "
-    "(PostgreSQL treats it as an escape, SQLite treats it as an ordinary character, and "
-    "Snowflake requires the clause to be stated), so a pattern relying on the default is "
-    "not portable. Prefer a character other than a backslash: several dialects also treat "
-    "a backslash specially inside string literals, before the pattern reaches LIKE, and "
-    "Redshift rejects `ESCAPE '\\'` outright. Omit it to emit no `ESCAPE` clause. Not "
-    "supported on BigQuery, whose GoogleSQL has no `ESCAPE` clause: escape wildcards "
-    "inside the pattern there instead."
-)
 DATA_QUALITY_ISSUES = [DataQualityIssues.VALIDITY.value]
 SUPPORTED_DATA_SOURCES = [
     SupportedDataSources.SQLITE.value,
@@ -88,7 +81,7 @@ class ExpectColumnValuesToMatchLikePattern(ColumnMapExpectation):
 
     Other Parameters:
         escape (str or None): \
-            {ESCAPE_DESCRIPTION}
+            {LIKE_PATTERN_ESCAPE_DESCRIPTION}
         mostly (None or a float between 0 and 1): \
             {MOSTLY_DESCRIPTION} \
             For more detail, see [mostly](https://docs.greatexpectations.io/docs/reference/expectations/standard_arguments/#mostly). Default 1.
@@ -204,20 +197,9 @@ class ExpectColumnValuesToMatchLikePattern(ColumnMapExpectation):
     like_pattern: Union[str, SuiteParameterDict] = pydantic.Field(
         description=LIKE_PATTERN_DESCRIPTION
     )
-    escape: Union[str, SuiteParameterDict, None] = pydantic.Field(
-        default=None, description=ESCAPE_DESCRIPTION
-    )
+    escape: LikePatternEscapeField = None
 
-    @pydantic.validator("escape")
-    def validate_escape(
-        cls, escape: str | SuiteParameterDict | None
-    ) -> str | SuiteParameterDict | None:
-        # SQL permits exactly one escape character; a longer string would render an
-        # ESCAPE clause the database rejects, so fail here with a usable message instead.
-        if isinstance(escape, str) and len(escape) != 1:
-            raise ValueError("escape must be a single character.")  # noqa: TRY003 # FIXME CoP
-
-        return escape
+    _validate_escape = pydantic.validator("escape", allow_reuse=True)(validate_like_pattern_escape)
 
     library_metadata: ClassVar[Dict[str, Union[str, list, bool]]] = {
         "maturity": "production",
@@ -283,6 +265,7 @@ class ExpectColumnValuesToMatchLikePattern(ColumnMapExpectation):
         add_param_args: AddParamArgs = (
             ("column", RendererValueType.STRING),
             ("like_pattern", RendererValueType.STRING),
+            ("escape", RendererValueType.STRING),
             ("mostly", RendererValueType.NUMBER),
         )
         for name, param_type in add_param_args:
@@ -295,15 +278,20 @@ class ExpectColumnValuesToMatchLikePattern(ColumnMapExpectation):
         else:
             template_str = "Values "
 
+        template_str += "must match like pattern $like_pattern"
+
+        # Without this the escaped and unescaped Expectations render identically, and a
+        # reader takes the wildcards in the pattern at face value.
+        if params.escape:
+            template_str += ", escaping wildcards with $escape"
+
         if params.mostly and params.mostly.value < 1.0:
             renderer_configuration = cls._add_mostly_pct_param(
                 renderer_configuration=renderer_configuration
             )
-            template_str += (
-                "must match like pattern $like_pattern, at least $mostly_pct % of the time."
-            )
+            template_str += ", at least $mostly_pct % of the time."
         else:
-            template_str += "must match like pattern $like_pattern."
+            template_str += "."
 
         renderer_configuration.template_str = template_str
 
@@ -324,14 +312,16 @@ class ExpectColumnValuesToMatchLikePattern(ColumnMapExpectation):
 
         params = substitute_none_for_missing(
             configuration.kwargs,
-            ["column", "like_pattern", "mostly"],
+            ["column", "like_pattern", "escape", "mostly"],
         )
         if params["mostly"] is not None:
             params["mostly_pct"] = num_to_str(params["mostly"] * 100, no_scientific=True)
         mostly_str = "" if params.get("mostly") is None else ", at least $mostly_pct % of the time"
         like_pattern = params.get("like_pattern")  # noqa: F841 # FIXME CoP
 
-        template_str = f"Values must match like pattern $like_pattern {mostly_str}: "
+        escape_str = "" if params.get("escape") is None else ", escaping wildcards with $escape"
+
+        template_str = f"Values must match like pattern $like_pattern{escape_str}{mostly_str}: "
 
         return [
             RenderedStringTemplateContent(
