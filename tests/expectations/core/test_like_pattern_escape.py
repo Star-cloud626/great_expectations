@@ -1,8 +1,9 @@
 """Unit coverage for the `escape` parameter shared by the four LIKE pattern Expectations.
 
 The integration suites exercise the accepted path against real backends. What they cannot
-reach is the rejection path, which never reaches SQL, and the published JSON schema, which
-is what a consumer validating a config without instantiating it actually sees.
+reach is the rejection path, which never reaches SQL, the published JSON schema, which
+is what a consumer validating a config without instantiating it actually sees, and the
+rendered description, which is what a reader of Data Docs actually sees.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ import pytest
 import great_expectations.expectations as gxe
 from great_expectations.compatibility import pydantic
 from great_expectations.expectations.core import schemas
+from great_expectations.expectations.registry import get_renderer_impl
+from great_expectations.render import AtomicPrescriptiveRendererType, LegacyRendererType
 
 # Each Expectation with the kwargs it needs besides `escape`.
 LIKE_PATTERN_EXPECTATIONS: list[tuple[type, dict[str, Any]]] = [
@@ -97,3 +100,94 @@ def test_published_schema_constrains_escape_to_one_character(expectation_class: 
     ]
 
     assert string_branches == [{"type": "string", "minLength": 1, "maxLength": 1}]
+
+
+# The summary each Expectation renders, keyed by class, without and with `escape="!"`.
+# Spelled out rather than built from the renderer's own fragments, so that a renderer
+# dropping the escape, or changing the unescaped wording, fails here.
+ATOMIC_SUMMARY_TEMPLATES: dict[type, tuple[str, str]] = {
+    gxe.ExpectColumnValuesToMatchLikePattern: (
+        "$column values must match like pattern $like_pattern.",
+        "$column values must match like pattern $like_pattern, escaping wildcards with $escape.",
+    ),
+    gxe.ExpectColumnValuesToNotMatchLikePattern: (
+        "$column values must not match like pattern $like_pattern.",
+        "$column values must not match like pattern $like_pattern, "
+        "escaping wildcards with $escape.",
+    ),
+    gxe.ExpectColumnValuesToMatchLikePatternList: (
+        "$column values must match the following like patterns: $like_pattern_list_0",
+        "$column values must match the following like patterns: "
+        "$like_pattern_list_0, escaping wildcards with $escape",
+    ),
+    gxe.ExpectColumnValuesToNotMatchLikePatternList: (
+        "$column values must not match the following like patterns: $like_pattern_list_0",
+        "$column values must not match the following like patterns: "
+        "$like_pattern_list_0, escaping wildcards with $escape",
+    ),
+}
+
+
+def _render(expectation: Any, renderer_type: str) -> dict[str, Any]:
+    renderer = get_renderer_impl(
+        object_name=expectation.expectation_type, renderer_type=renderer_type
+    )[1]
+    rendered = renderer(configuration=expectation.configuration)
+    if isinstance(rendered, list):  # the legacy renderer returns a list of content blocks
+        (rendered,) = rendered
+        return rendered.to_json_dict()["string_template"]
+    return rendered.to_json_dict()["value"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("expectation_class", "kwargs"), LIKE_PATTERN_EXPECTATIONS, ids=EXPECTATION_IDS
+)
+def test_atomic_summary_discloses_the_escape(
+    expectation_class: type, kwargs: dict[str, Any]
+) -> None:
+    """Without the escape an escaped pattern reads as wildcards, describing another check."""
+    rendered = _render(
+        expectation_class(**kwargs, escape="!"), AtomicPrescriptiveRendererType.SUMMARY
+    )
+
+    assert rendered["template"] == ATOMIC_SUMMARY_TEMPLATES[expectation_class][1]
+    assert rendered["params"]["escape"]["value"] == "!"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("expectation_class", "kwargs"), LIKE_PATTERN_EXPECTATIONS, ids=EXPECTATION_IDS
+)
+def test_atomic_summary_is_unchanged_without_an_escape(
+    expectation_class: type, kwargs: dict[str, Any]
+) -> None:
+    rendered = _render(expectation_class(**kwargs), AtomicPrescriptiveRendererType.SUMMARY)
+
+    assert rendered["template"] == ATOMIC_SUMMARY_TEMPLATES[expectation_class][0]
+    assert "escape" not in rendered["params"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("expectation_class", "kwargs"), LIKE_PATTERN_EXPECTATIONS, ids=EXPECTATION_IDS
+)
+def test_legacy_prescriptive_renderer_discloses_the_escape(
+    expectation_class: type, kwargs: dict[str, Any]
+) -> None:
+    rendered = _render(expectation_class(**kwargs, escape="!"), LegacyRendererType.PRESCRIPTIVE)
+
+    assert ", escaping wildcards with $escape" in rendered["template"]
+    assert rendered["params"]["escape"] == "!"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("expectation_class", "kwargs"), LIKE_PATTERN_EXPECTATIONS, ids=EXPECTATION_IDS
+)
+def test_legacy_prescriptive_renderer_omits_an_absent_escape(
+    expectation_class: type, kwargs: dict[str, Any]
+) -> None:
+    rendered = _render(expectation_class(**kwargs), LegacyRendererType.PRESCRIPTIVE)
+
+    assert "$escape" not in rendered["template"]

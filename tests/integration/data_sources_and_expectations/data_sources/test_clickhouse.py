@@ -162,17 +162,30 @@ class TestClickHouseRegexAndLikePatterns:
         four dialects reached that way -- Trino, Dremio and Teradata being the others --
         that has a data source test config here to check that against a real server.
 
-        No value contains a literal underscore, so an escaped `_` must match nothing. The
-        unescaped pattern in `test_match_like_pattern` matches everything, which is what
-        makes this a check of the escape rather than of LIKE.
+        Only `a_c` contains a literal underscore, so with the escape honored `abc` is the one
+        unexpected value. Each way this could go wrong reports something else: were the
+        escape dropped, `!` would be an ordinary character and both values would be
+        unexpected; were the clause rejected by the server, the metric would raise and there
+        would be no unexpected list at all. Its own data rather than `DATA`, which holds no
+        underscore and so cannot tell an escaped `_` from a dropped one.
         """
-        with self._batch_setup().batch_test_context() as batch:
+        batch_setup = ClickHouseBatchTestSetup(
+            config=ClickHouseDatasourceTestConfig(
+                column_types={self.COL: clickhouse_types.Nullable(clickhouse_types.String)}
+            ),
+            data=pd.DataFrame({self.COL: ["a_c", "abc"]}),
+            extra_data={},
+            context=get_context(mode="ephemeral"),
+        )
+        with batch_setup.batch_test_context() as batch:
             result = batch.validate(
                 gxe.ExpectColumnValuesToMatchLikePattern(
                     column=self.COL, like_pattern="a!_c", escape="!"
-                )
+                ),
+                result_format=ResultFormat.COMPLETE,
             )
-        assert not result.success
+        assert result.exception_info.get("raised_exception") is False, result.exception_info
+        assert result.result["unexpected_list"] == ["abc"]
 
 
 class TestClickHouseNullBearingData:

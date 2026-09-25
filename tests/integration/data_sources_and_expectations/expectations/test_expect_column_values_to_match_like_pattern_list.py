@@ -338,9 +338,10 @@ def test_escape_applies_under_match_on_all(batch_for_datasource: Batch) -> None:
     """match_on="all" builds the condition with sa.and_, a different branch from "any".
 
     Both patterns name a literal underscore, so only the row containing one satisfies all
-    of them. Were the escape dropped from this branch the patterns would be wildcards,
-    every row would match both, and nothing would be reported as unexpected -- which is
-    how this fails if the "all" branch stops threading escape through.
+    of them. Were the escape dropped from this branch, `!` would be an ordinary character
+    that no row contains, so no row would match either pattern and all three would be
+    reported as unexpected -- which is how this fails if the "all" branch stops threading
+    escape through.
     """
     expectation = gxe.ExpectColumnValuesToMatchLikePatternList(
         column=WILDCARD_LITERALS,
