@@ -249,9 +249,9 @@ def get_dialect_regex_expression(  # noqa: C901, PLR0911, PLR0912, PLR0915 # FIX
             dialect, clickhouse_sqlalchemy.drivers.base.ClickHouseDialect
         ):
             if positive:
-                return sa.func.regexp_like(column, sqlalchemy.literal(regex))
+                return sa.func.match(column, sqlalchemy.literal(regex))
             else:
-                return sa.not_(sa.func.regexp_like(column, sqlalchemy.literal(regex)))
+                return sa.not_(sa.func.match(column, sqlalchemy.literal(regex)))
     except (
         AttributeError,
         TypeError,
@@ -1479,6 +1479,7 @@ def sqlalchemy_select_to_sql_string(
 
 def get_sqlalchemy_source_table_and_schema(
     engine: SqlAlchemyExecutionEngine,
+    batch_id: Optional[str] = None,
 ) -> sa.Table:
     """
     Util method to return table name that is associated with current batch.
@@ -1488,15 +1489,23 @@ def get_sqlalchemy_source_table_and_schema(
 
     Args:
         engine (SqlAlchemyExecutionEngine): Engine that is currently being used to calculate the Metrics
+        batch_id (str): The Batch whose source table to return. The engine is shared by every
+            Batch of its datasource, so when the metric's domain names a Batch that one is used;
+            only without one does this fall back to the engine's most recently loaded Batch.
     Returns:
         SqlAlchemy Table that is the source table and schema.
     """  # noqa: E501 # FIXME CoP
-    assert isinstance(engine.batch_manager.active_batch_data, SqlAlchemyBatchData), (
+    batch_data = None
+    if batch_id is not None:
+        batch_data = engine.batch_manager.batch_data_cache.get(batch_id)
+    if batch_data is None:
+        batch_data = engine.batch_manager.active_batch_data
+    assert isinstance(batch_data, SqlAlchemyBatchData), (
         "`active_batch_data` not SqlAlchemyBatchData"
     )
 
-    schema_name = engine.batch_manager.active_batch_data.source_schema_name
-    table_name = engine.batch_manager.active_batch_data.source_table_name
+    schema_name = batch_data.source_schema_name
+    table_name = batch_data.source_table_name
     if table_name:
         return sa.Table(
             table_name,
@@ -1504,7 +1513,7 @@ def get_sqlalchemy_source_table_and_schema(
             schema=schema_name,
         )
     else:
-        return engine.batch_manager.active_batch_data.selectable
+        return batch_data.selectable
 
 
 def get_unexpected_indices_for_multiple_pandas_named_indices(  # noqa: C901 # FIXME CoP

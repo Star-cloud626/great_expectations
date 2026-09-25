@@ -65,6 +65,7 @@ def get_extras_require():
         "hive",  # https://github.com/dropbox/PyHive/blob/master/setup.py
         "sql-server",  # https://github.com/mkleehammer/pyodbc/blob/master/setup.py
         "mysql",  # https://github.com/PyMySQL/PyMySQL/blob/main/pyproject.toml
+        "oracle",  # https://github.com/oracle/python-oracledb/blob/main/pyproject.toml
         "postgresql",  # https://github.com/psycopg/psycopg2/blob/master/setup.py
         "trino",  # https://github.com/trinodb/trino-python-client/blob/master/setup.py
         "vertica",  # https://github.com/bluelabsio/sqlalchemy-vertica-python/blob/master/setup.py
@@ -79,13 +80,6 @@ def get_extras_require():
         "test",
         "tools",
         "all-contrib-expectations",
-        # Test-only for now. The extras map is derived by globbing this directory, so a
-        # requirements file is enough on its own to publish `pip install
-        # 'great_expectations[oracle]'` as a supported install path. The driver is
-        # installed here for the CI lane, but the dialect still fails parts of the suite,
-        # so it is not yet something to offer users. Move this key into `sqla_keys` to
-        # publish the extra.
-        "oracle",
     )
 
     requirements_dir = "reqs"
@@ -135,13 +129,23 @@ def get_extras_require():
 with open("requirements.txt") as f:
     required = f.read().splitlines()
 
-long_description = "Always know what to expect from your data. (See https://github.com/great-expectations/great_expectations for full description)."  # noqa: E501
+long_description = "Always know what to expect from your data. (See https://github.com/fivetran/great_expectations for full description)."  # noqa: E501
 
 config = {
     "description": "Always know what to expect from your data.",
     "author": "The Great Expectations Team",
     "url": "https://greatexpectations.io",
-    "download_url": "https://github.com/great-expectations/great_expectations",
+    "download_url": "https://github.com/fivetran/great_expectations",
+    # Registry-side links back to the source repository. Package-hosting and
+    # dependency-tracking services key on a repository-type project URL (not on
+    # download_url) to associate the published package with its source; without
+    # one the package is unlinked and its public dependents go uncounted.
+    "project_urls": {
+        "Homepage": "https://greatexpectations.io",
+        "Documentation": "https://docs.greatexpectations.io",
+        "Repository": "https://github.com/fivetran/great_expectations",
+        "Source": "https://github.com/fivetran/great_expectations",
+    },
     "author_email": "team@greatexpectations.io",
     "version": versioneer.get_version(),
     "cmdclass": versioneer.get_cmdclass(),
